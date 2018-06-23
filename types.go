@@ -1,14 +1,19 @@
 package main
 
-import "encoding/xml"
+import (
+	"crypto/md5"
+	"encoding/xml"
+	"fmt"
+)
 
 type report struct {
-	XMLName xml.Name `xml:"report"`
-	Items   []item   `xml:"item"`
+	XMLName xml.Name      `xml:"report"`
+	Items   []reportEntry `xml:"item"`
 }
-type item struct {
+type reportEntry struct {
+	ID            string   `gorm:"unique_index"`
 	XMLName       xml.Name `xml:"item"`
-	CommName      string   `xml:"commName"`
+	CommName      string   `xml:"commName";gorm:"column:CommName"`
 	CityName      string   `xml:"cityName"`
 	PackageDesc   string   `xml:"packageDesc"`
 	VarietyName   string   `xml:"varietyName"`
@@ -36,4 +41,13 @@ type item struct {
 	MarketTone    string   `xml:"marketTone"`
 	PriceComment  string   `xml:"priceComment"`
 	Comment       string   `xml:"comment"`
+}
+
+func (reportEntry) TableName() string {
+	return "oranges"
+}
+
+func (r *reportEntry) getHash() string {
+	serialized, _ := xml.Marshal(r)
+	return fmt.Sprintf("%x", md5.Sum(serialized))
 }
