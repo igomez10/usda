@@ -5,10 +5,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/jinzhu/gorm"
@@ -28,16 +26,20 @@ func main() {
 	// db.Table("oranges").CreateTable(&reportEntry{})
 	defer db.Close()
 
-	channelHTTPResponses := make(chan *http.Response, *numDays)
+	channelHTTPResponses := make(chan *http.Response, 100)
 	doneHTTPResponses := make(chan bool)
-	channelReports := make(chan *report, *numDays*200)
+	channelReports := make(chan *report, 20000)
 	doneReports := make(chan bool)
+	channelDates := make(chan string, 30)
+	doneChannelDates := make(chan bool)
 
+	/** This go routine listens on the chanel channelHTTPResponse and invokes the parseReport function with the item in the channelHTTPResponses `j`  and `channelReports`
+	**/
 	go func() {
 		for {
 			j, more := <-channelHTTPResponses
 			if more {
-				parseReport((*j).Body, channelReports)
+				go parseReport(*j, channelReports)
 			} else {
 				println("COMPLETE HTTPRESPONSES CHANNEL")
 				doneHTTPResponses <- true
@@ -50,7 +52,7 @@ func main() {
 		for {
 			j, more := <-channelReports
 			if more {
-				postReportToDatabase(j, db)
+				go postReportToDatabase(j, db)
 			} else {
 				println("COMPLETE REPORTS CHANNEL")
 				doneReports <- true
@@ -59,21 +61,33 @@ func main() {
 		}
 	}()
 
-	var wg sync.WaitGroup
-	wg.Add(*numDays)
+	go func() {
+		for {
+			j, more := <-channelDates
+			if more {
+				go getReport("ORANGES", j, channelHTTPResponses)
+			} else {
+				println("COMPLETE CHANNEL DATES")
+				doneChannelDates <- true
+				return
+			}
+		}
+	}()
 
 	for i := 0; i < *numDays; i++ {
-		go func(i int) {
-			date := currentDate.AddDate(0, 0, -i)
+		date := currentDate.AddDate(0, 0, -i)
+		if date.Weekday() != 0 && date.Weekday() != 6 {
 			var iterativeDate string = date.Format("01/02/2006")
-			getReport("ORANGES", iterativeDate, channelHTTPResponses)
-			wg.Done()
-		}(i)
+			go func() {
+				channelDates <- iterativeDate
+			}()
+		}
 	}
-	wg.Wait()
 
-	close(channelHTTPResponses)
+	<-doneChannelDates
+	close(channelDates)
 	<-doneHTTPResponses
+	close(channelHTTPResponses)
 	close(channelReports)
 	<-doneReports
 }
@@ -86,6 +100,9 @@ func postReportToDatabase(r *report, db *gorm.DB) {
 	}
 }
 
+/**
+getReport makes the http request with the provided fruit name `name` on the date `date` and sends the http response to the channel channelHTTPResponses `c`
+**/
 func getReport(name string, date string, c chan *http.Response) {
 	fmt.Println("Extracted date: ", date)
 	var baseURL string = "https://www.marketnews.usda.gov/mnp/fv-report-top-filters?&navClass=FRUITS&commAbr=ORG&navType=byComm&repType=termPriceDaily&className=FRUITS&commName=%s&locName=&type=termPrice&repDate=%s&endDate=%s&format=xml&rebuild=false"
@@ -100,9 +117,14 @@ func getReport(name string, date string, c chan *http.Response) {
 	}
 }
 
-func parseReport(input io.Reader, c chan *report) {
+/**
+parseReport receives the http response and parses it with an xml parser into a struct report r
+After this, it sends the remaining struct r into the channel `c` which is `channelReports`
+**/
+func parseReport(input http.Response, c chan *report) {
+	defer input.Body.Close()
 	var r report
-	decoder := xml.NewDecoder(input)
+	decoder := xml.NewDecoder(input.Body)
 	decoder.CharsetReader = charset.NewReaderLabel
 	err := decoder.Decode(&r)
 	if err != nil {

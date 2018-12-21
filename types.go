@@ -44,7 +44,7 @@ type reportEntry struct {
 }
 
 func (reportEntry) TableName() string {
-	return "oranges"
+	return "oranges3"
 }
 
 func (r *reportEntry) getHash() string {
